@@ -1,0 +1,36 @@
+To start redis server on port localhost:6379 run command : g++ *.cpp -o main -pthread -lws2_32
+This will create a main.exe file after successfull compilation of code 
+Run main.exe file using command : .\main.exe
+
+Check connection on port 6379 : netstat -aon | findstr :6379
+This should print 
+TCP    0.0.0.0:6379           0.0.0.0:0              LISTENING       12420
+
+Get the image name of pid: 12420 using command : tasklist /FI "PID eq 12420"
+This shoul print as 
+Image Name                     PID Session Name        Session#    Mem Usage
+========================= ======== ================ =========== ============
+main.exe                     12420 Console                    2      5,652 K  
+
+Test TCP Connection at 6379 using command : Test-NetConnection -ComputerName 127.0.0.1 -Port 6379
+This should print TcpTestSucceeded : True
+
+ComputerName     : 127.0.0.1
+RemoteAddress    : 127.0.0.1
+RemotePort       : 6379
+InterfaceAlias   : Loopback Pseudo-Interface 1                                                
+SourceAddress    : 127.0.0.1
+TcpTestSucceeded : True
+
+
+I used docker to access redis-cli 
+using command : docker run -it --rm redis redis-cli -h host.docker.internal -p 6379
+
+This will give access to host.docker.internal:6379 terminal 
+
+Now, you can perform actions like
+SET name "Shreyash"
+" age 22
+LPUSH mylist "item1"
+
+It should respond by printing :OK
