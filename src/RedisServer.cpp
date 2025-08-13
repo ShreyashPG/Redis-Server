@@ -1,73 +1,95 @@
+
+
 #include "../include/RedisServer.h"
 #include "../include/RedisCommandHandler.h"
 #include "../include/RedisDatabase.h"
 
 #include <iostream>
-#include <sys/socket.h>
-#include <unistd.h>
-#include <netinet/in.h>
 #include <vector>
 #include <thread>
 #include <cstring>
-#include <signal.h>
 
-// Global pointer for signal handling
+// For Windows Sockets
+#include <winsock2.h>
+#include <ws2tcpip.h>
+
+// For signal handling on Windows
+#include <windows.h>
+
+// Link with Ws2_32.lib
+#pragma comment(lib, "Ws2_32.lib")
+
 static RedisServer* globalServer = nullptr;
 
-void signalHandler(int signum) {
-    if (globalServer) {
-        std::cout << "\nCaught signal " << signum << ", shutting down...\n";
-        globalServer->shutdown();
+BOOL WINAPI consoleHandler(DWORD dwType) {
+    if (dwType == CTRL_C_EVENT) {
+        if (globalServer) {
+            std::cout << "\nCaught signal CTRL-C, shutting down...\n";
+            globalServer->shutdown();
+        }
+        return TRUE;
     }
-    exit(signum);
+    return FALSE;
 }
 
 void RedisServer::setupSignalHandler() {
-    signal(SIGINT, signalHandler);
+    SetConsoleCtrlHandler(consoleHandler, TRUE);
 }
 
-RedisServer::RedisServer(int port) : port(port), server_socket(-1), running(true) {
+RedisServer::RedisServer(int port) : port(port), server_socket(INVALID_SOCKET), running(true) {
     globalServer = this;
     setupSignalHandler();
 }
 
 void RedisServer::shutdown() {
     running = false;
-    if (server_socket != -1) {
-        // Before shutdown, persist the database
+    if (server_socket != INVALID_SOCKET) {
         if (RedisDatabase::getInstance().dump("dump.my_rdb"))
             std::cout << "Database Dumped to dump.my_rdb\n";
-        else 
+        else
             std::cerr << "Error dumping database\n";
-        close(server_socket);
+        closesocket(server_socket);
+        WSACleanup();
     }
     std::cout << "Server Shutdown Complete!\n";
 }
 
 void RedisServer::run() {
-    server_socket = socket(AF_INET, SOCK_STREAM, 0);
-    if (server_socket < 0) {
-        std::cerr << "Error Creating Server Socket\n";
+    WSADATA wsaData;
+    int iResult = WSAStartup(MAKEWORD(2, 2), &wsaData);
+    if (iResult != 0) {
+        std::cerr << "WSAStartup failed: " << iResult << "\n";
+        return;
+    }
+
+    server_socket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (server_socket == INVALID_SOCKET) {
+        std::cerr << "Error Creating Server Socket: " << WSAGetLastError() << "\n";
+        WSACleanup();
         return;
     }
 
     int opt = 1;
-    setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+    setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR, (char*)&opt, sizeof(opt));
 
     sockaddr_in serverAddr{};
     serverAddr.sin_family = AF_INET;
     serverAddr.sin_port = htons(port);
-    serverAddr.sin_addr.s_addr = INADDR_ANY;
+    serverAddr.sin_addr.S_un.S_addr = INADDR_ANY;
 
-    if (bind(server_socket, (struct sockaddr*)&serverAddr, sizeof(serverAddr)) < 0) {
-        std::cerr << "Error Binding Server Socket\n";
+    if (bind(server_socket, (SOCKADDR*)&serverAddr, sizeof(serverAddr)) == SOCKET_ERROR) {
+        std::cerr << "Error Binding Server Socket: " << WSAGetLastError() << "\n";
+        closesocket(server_socket);
+        WSACleanup();
         return;
     }
 
-    if (listen(server_socket, 10) < 0) {
-        std::cerr << "Error Listening On Server Socket\n";
+    if (listen(server_socket, 10) == SOCKET_ERROR) {
+        std::cerr << "Error Listening On Server Socket: " << WSAGetLastError() << "\n";
+        closesocket(server_socket);
+        WSACleanup();
         return;
-    } 
+    }
 
     std::cout << "Redis Server Listening On Port " << port << "\n";
 
@@ -75,14 +97,14 @@ void RedisServer::run() {
     RedisCommandHandler cmdHandler;
 
     while (running) {
-        int client_socket = accept(server_socket, nullptr, nullptr);
-        if (client_socket < 0) {
-            if (running) 
-                std::cerr << "Error Accepting Client Connection\n";
+        SOCKET client_socket = accept(server_socket, nullptr, nullptr);
+        if (client_socket == INVALID_SOCKET) {
+            if (running)
+                std::cerr << "Error Accepting Client Connection: " << WSAGetLastError() << "\n";
             break;
         }
 
-        threads.emplace_back([client_socket, &cmdHandler](){
+        threads.emplace_back([client_socket, &cmdHandler]() {
             char buffer[1024];
             while (true) {
                 memset(buffer, 0, sizeof(buffer));
@@ -92,17 +114,16 @@ void RedisServer::run() {
                 std::string response = cmdHandler.processCommand(request);
                 send(client_socket, response.c_str(), response.size(), 0);
             }
-            close(client_socket);
+            closesocket(client_socket);
         });
     }
-    
+
     for (auto& t : threads) {
         if (t.joinable()) t.join();
     }
 
-    // Before shutdown, persist the database
     if (RedisDatabase::getInstance().dump("dump.my_rdb"))
         std::cout << "Database Dumped to dump.my_rdb\n";
-    else 
+    else
         std::cerr << "Error dumping database\n";
 }

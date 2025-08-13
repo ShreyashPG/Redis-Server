@@ -1,8 +1,10 @@
+
 #ifndef REDIS_SERVER_H
 #define REDIS_SERVER_H
 
 #include <string>
 #include <atomic>
+#include <winsock2.h> // For SOCKET type
 
 class RedisServer {
 public:
@@ -12,10 +14,9 @@ public:
 
 private:
     int port;
-    int server_socket;
+    SOCKET server_socket;
     std::atomic<bool> running;
 
-    // Setup signal handling for graceful shutdown (ctrl + c) 
     void setupSignalHandler();
 };
 
